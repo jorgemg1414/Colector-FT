@@ -141,6 +141,10 @@ function loadAllowedSkus() {
   }
 }
 
+function toggleDarkMode() {
+  $q.dark.toggle()
+}
+
 function handleFileUpload(selectedFile) {
   if (!selectedFile) return
 
@@ -202,7 +206,15 @@ function clearAllowedSkus() {
 <template>
   <div class="home-view">
     <header>
-      <h1>Colector de Inventario</h1>
+      <div class="header-content">
+        <h1>Colector de Inventario</h1>
+        <q-btn
+          flat
+          :icon="$q.dark.isActive ? 'light_mode' : 'dark_mode'"
+          @click="toggleDarkMode"
+          class="dark-mode-btn"
+        />
+      </div>
     </header>
     <main class="home-main">
       <!-- Sección para crear nuevo inventario -->
@@ -330,17 +342,38 @@ function clearAllowedSkus() {
 header {
   background-color: #1976D2;
   color: white;
-  padding: 1rem;
+  padding: 0;
+  padding-block: 0;
+  padding-inline: 0;
   text-align: center;
   position: sticky;
   top: 0;
   z-index: 10;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: none;
+  line-height: 1;
+}
+
+body.dark header {
+  background-color: #0d47a1;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 0 40px;
 }
 
 header h1 {
-  margin: 0;
+  margin: 0px;
   font-size: 1.2rem;
+}
+
+.dark-mode-btn {
+  position: absolute;
+  right: 10px;
+  color: white;
 }
 
 .home-main {
@@ -359,6 +392,10 @@ header h1 {
   text-align: center;
 }
 
+body.body--dark .home-card {
+  background: #1e1e1e;
+}
+
 .history-card {
   background: white;
   padding: 25px;
@@ -367,15 +404,35 @@ header h1 {
   flex: 1;
 }
 
+body.body--dark .history-card {
+  background: #1e1e1e;
+}
+
 .home-card h2, .history-card h2 {
   margin-top: 0;
   color: #1976D2;
   font-size: 1.2rem;
 }
 
+body.body--dark .home-card h2, body.body--dark .history-card h2 {
+  color: #64b5f6;
+}
+
 .home-card p {
   color: #666;
   margin-bottom: 20px;
+}
+
+body.body--dark .home-card p {
+  color: #aaaaaa;
+}
+
+.home-card, .history-card {
+  color: #333;
+}
+
+body.body--dark .home-card, body.body--dark .history-card {
+  color: #e0e0e0;
 }
 
 .name-input {
@@ -408,6 +465,10 @@ header h1 {
   color: #999;
 }
 
+body.body--dark .no-inventories {
+  color: #777;
+}
+
 .no-inventories p {
   margin-top: 10px;
 }
@@ -421,5 +482,55 @@ header h1 {
 
 .file-input {
   flex: 1;
+}
+
+/* Estilos para elementos de Quasar en modo oscuro */
+body.body--dark .q-item {
+  color: #e0e0e0;
+  background-color: #1e1e1e;
+}
+
+body.body--dark .q-item__label {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-item__label.caption {
+  color: #aaaaaa;
+}
+
+body.body--dark .q-input--filled {
+  background-color: #2a2a2a;
+}
+
+body.body--dark .q-field__label {
+  color: #aaaaaa;
+}
+
+body.body--dark .q-field__control {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-field__input {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-list--bordered {
+  border-color: #333;
+}
+
+body.body--dark .q-item--separator {
+  border-color: #333;
+}
+
+body.body--dark .q-btn {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-file--filled {
+  background-color: #2a2a2a;
+}
+
+body.body--dark .text-grey {
+  color: #aaaaaa !important;
 }
 </style>

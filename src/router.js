@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from './views/HomeView.vue'
 import ScannerView from './views/ScannerView.vue'
+import ReportsView from './views/ReportsView.vue'
 
 const routes = [
   {
@@ -12,6 +13,12 @@ const routes = [
     path: '/sku/:name',
     name: 'Scanner',
     component: ScannerView,
+    props: true
+  },
+  {
+    path: '/reports/:name',
+    name: 'Reports',
+    component: ReportsView,
     props: true
   }
 ]

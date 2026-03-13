@@ -3,6 +3,7 @@ import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import CameraScanner from '../components/CameraScanner.vue'
+import * as XLSX from 'xlsx'
 
 const route = useRoute()
 const router = useRouter()
@@ -204,8 +205,7 @@ function confirmQuantity() {
   } else {
     inventory[sku] = {
       nombre: tempProductName.value,
-      cantidad: qty,
-      ubicacion: 'General'
+      cantidad: qty
     }
   }
 
@@ -302,6 +302,47 @@ function downloadTxt() {
   })
 }
 
+function downloadExcel() {
+  if (Object.keys(inventory).length === 0) {
+    $q.notify({
+      type: 'warning',
+      message: 'No hay productos para descargar.',
+      position: 'top'
+    })
+    return
+  }
+
+  // Crear datos para Excel
+  const data = []
+  for (const sku in inventory) {
+    data.push({
+      SKU: sku,
+      Producto: inventory[sku].nombre,
+      Cantidad: inventory[sku].cantidad
+    })
+  }
+
+  // Crear worksheet
+  const ws = XLSX.utils.json_to_sheet(data)
+  
+  // Crear workbook
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
+  
+  // Generar nombre de archivo con fecha
+  const date = new Date().toISOString().split('T')[0]
+  const fileName = `${inventoryName.value}_inventario_${date}.xlsx`
+  
+  // Descargar archivo
+  XLSX.writeFile(wb, fileName)
+
+  $q.notify({
+    type: 'positive',
+    message: `Archivo ${fileName} descargado.`,
+    position: 'top'
+  })
+}
+
 function goHome() {
   router.push('/')
 }
@@ -370,6 +411,14 @@ function handleCodeScanned(code) {
   skuInput.value = code
   addItem()
 }
+
+function toggleDarkMode() {
+  $q.dark.toggle()
+}
+
+function goToReports() {
+  router.push(`/reports/${encodeURIComponent(inventoryName.value)}`)
+}
 </script>
 
 <template>
@@ -378,12 +427,18 @@ function handleCodeScanned(code) {
       <div class="header-content">
         <q-btn flat icon="arrow_back" @click="goHome" class="back-btn" />
         <h1>{{ inventoryName }}</h1>
+        <q-btn
+          flat
+          :icon="$q.dark.isActive ? 'light_mode' : 'dark_mode'"
+          @click="toggleDarkMode"
+          class="dark-mode-btn"
+        />
       </div>
     </header>
     <main>
       <!-- Sección de Escaneo -->
       <section class="scanner-section">
-        <h2>Escanear SKU</h2>
+        <h4>Escanear SKU</h4>
         <div class="scanner-container">
           <q-input
             ref="skuInputRef"
@@ -464,6 +519,22 @@ function handleCodeScanned(code) {
               icon="download" 
               label="TXT" 
               @click="downloadTxt" 
+              size="sm"
+              :disable="Object.keys(inventory).length === 0"
+            />
+            <q-btn 
+              color="primary" 
+              icon="table_view" 
+              label="Excel" 
+              @click="downloadExcel" 
+              size="sm"
+              :disable="Object.keys(inventory).length === 0"
+            />
+            <q-btn 
+              color="accent" 
+              icon="bar_chart" 
+              label="Reportes" 
+              @click="goToReports" 
               size="sm"
               :disable="Object.keys(inventory).length === 0"
             />
@@ -584,6 +655,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+body.body--dark {
+  background-color: #121212;
+}
+
 .scanner-view {
   padding-bottom: 60px;
   min-height: 100vh;
@@ -594,17 +669,26 @@ body {
 header {
   background-color: #1976D2;
   color: white;
-  padding: 0.5rem;
+  padding: 0;
+  padding-block: 0;
+  padding-inline: 0;
   position: sticky;
   top: 0;
   z-index: 10;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: none;
+  line-height: 1;
+}
+
+body.body--dark header {
+  background-color: #0d47a1;
 }
 
 .header-content {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 0 10px;
+  position: relative;
 }
 
 .back-btn {
@@ -613,9 +697,15 @@ header {
 
 header h1 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.2rem;
   flex: 1;
   text-align: center;
+}
+
+.dark-mode-btn {
+  position: absolute;
+  right: 10px;
+  color: white;
 }
 
 main {
@@ -628,6 +718,19 @@ main {
   margin-bottom: 20px;
 }
 
+.scanner-section h4 {
+  font-size: 0.9rem;
+  color: #1976D2;
+  margin: 0 0 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+body.body--dark .scanner-section h4 {
+  color: #64b5f6;
+}
+
 .scanner-container {
   display: flex;
   gap: 10px;
@@ -635,6 +738,10 @@ main {
   padding: 10px;
   border-radius: 8px;
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+body.body--dark .scanner-container {
+  background: #1e1e1e;
 }
 
 .sku-input {
@@ -660,6 +767,10 @@ main {
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 
+body.body--dark .summary-card {
+  background: #1e1e1e;
+}
+
 .summary-item {
   text-align: center;
 }
@@ -671,10 +782,18 @@ main {
   margin-bottom: 5px;
 }
 
+body.body--dark .summary-label {
+  color: #aaaaaa;
+}
+
 .summary-value {
   font-size: 1.2rem;
   font-weight: bold;
   color: #1976D2;
+}
+
+body.body--dark .summary-value {
+  color: #64b5f6;
 }
 
 .total-piezas {
@@ -718,6 +837,10 @@ main {
   color: #555;
 }
 
+body.body--dark .inventory-section h2 {
+  color: #aaaaaa;
+}
+
 .product-info {
   display: flex;
   flex-direction: column;
@@ -729,10 +852,18 @@ main {
   font-weight: bold;
 }
 
+body.body--dark .sku-code {
+  color: #777;
+}
+
 .product-name {
   font-size: 1rem;
   color: #333;
   margin-top: 2px;
+}
+
+body.body--dark .product-name {
+  color: #e0e0e0;
 }
 
 .quantity-badge {
@@ -779,5 +910,74 @@ footer {
   bottom: 0;
   width: 100%;
   font-size: 0.9rem;
+}
+
+/* Modo oscuro específico para footer */
+body.body--dark footer {
+  background-color: #1e1e1e;
+}
+
+/* Estilos para tabla en modo oscuro */
+body.body--dark .q-markup-table {
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+body.body--dark .q-markup-table thead tr th {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-markup-table tbody tr td {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-markup-table tbody tr:nth-child(even) {
+  background: #2a2a2a;
+}
+
+body.body--dark .q-markup-table tbody tr:hover {
+  background: #333333;
+}
+
+/* Estilos para componentes de Quasar en modo oscuro */
+body.body--dark .q-input--filled {
+  background-color: #2a2a2a;
+}
+
+body.body--dark .q-field__label {
+  color: #aaaaaa;
+}
+
+body.body--dark .q-field__control {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-field__input {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-btn {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-card {
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+}
+
+body.body--dark .q-dialog__title {
+  color: #e0e0e0;
+}
+
+body.body--dark .q-dialog__message {
+  color: #aaaaaa;
+}
+
+body.body--dark .text-grey {
+  color: #aaaaaa !important;
+}
+
+body.body--dark .q-badge {
+  background-color: #1976D2;
 }
 </style>
