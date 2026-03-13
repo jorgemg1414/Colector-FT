@@ -95,19 +95,6 @@ async function capturePhoto() {
   
   ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
   
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const data = imageData.data
-  
-  for (let i = 0; i < data.length; i += 4) {
-    const gray = (data[i] + data[i + 1] + data[i + 2]) / 3
-    const binary = gray > 128 ? 255 : 0
-    data[i] = binary
-    data[i + 1] = binary
-    data[i + 2] = binary
-  }
-  
-  ctx.putImageData(imageData, 0, 0)
-  
   capturedImage.value = canvas.toDataURL('image/jpeg', 0.8)
   
   try {
