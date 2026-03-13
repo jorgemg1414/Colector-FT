@@ -116,6 +116,23 @@ watch(inventory, () => {
   saveToStorage()
 }, { deep: true })
 
+// Watcher para detectar escaneo automático (sin Enter)
+let scanTimeout = null
+watch(skuInput, (newValue) => {
+  if (newValue && newValue.trim().length > 0) {
+    // Limpiar timeout anterior si existe
+    if (scanTimeout) clearTimeout(scanTimeout)
+    
+    // Esperar un poco a que el escáner termine de escribir
+    scanTimeout = setTimeout(() => {
+      // Solo procesar si el modal no está abierto ya
+      if (!showQuantityModal.value) {
+        addItem()
+      }
+    }, 100) // 100ms de espera
+  }
+})
+
 // Cargar datos al iniciar
 onMounted(() => {
   loadFromStorage()
