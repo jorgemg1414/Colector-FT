@@ -2,6 +2,7 @@
 import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
+import CameraScanner from '../components/CameraScanner.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +21,7 @@ const tempSku = ref('')
 const quantity = ref(1)
 const tempProductName = ref('')
 const editingSku = ref(null) // Para edición directa
+const showCameraModal = ref(false)
 
 // Base de datos vacía - permite cualquier SKU
 const productsDB = {}
@@ -116,22 +118,7 @@ watch(inventory, () => {
   saveToStorage()
 }, { deep: true })
 
-// Watcher para detectar escaneo automático (sin Enter)
-let scanTimeout = null
-watch(skuInput, (newValue) => {
-  if (newValue && newValue.trim().length > 0) {
-    // Limpiar timeout anterior si existe
-    if (scanTimeout) clearTimeout(scanTimeout)
-    
-    // Esperar un poco a que el escáner termine de escribir
-    scanTimeout = setTimeout(() => {
-      // Solo procesar si el modal no está abierto ya
-      if (!showQuantityModal.value) {
-        addItem()
-      }
-    }, 100) // 100ms de espera
-  }
-})
+// Watcher para buscar en tiempo real
 
 // Cargar datos al iniciar
 onMounted(() => {
@@ -229,13 +216,6 @@ function closeModal() {
   showQuantityModal.value = false
   tempSku.value = ''
   quantity.value = 1
-  
-  // Enfocar el input de escaneo después de cerrar el modal
-  setTimeout(() => {
-    if (skuInputRef.value && skuInputRef.value.focus) {
-      skuInputRef.value.focus()
-    }
-  }, 100)
 }
 
 function incrementItem(sku) {
@@ -385,6 +365,11 @@ function downloadUnauthorizedTxt() {
     position: 'top'
   })
 }
+
+function handleCodeScanned(code) {
+  skuInput.value = code
+  addItem()
+}
 </script>
 
 <template>
@@ -409,6 +394,16 @@ function downloadUnauthorizedTxt() {
             autofocus
             class="sku-input"
           >
+            <template v-slot:prepend>
+              <q-btn 
+                flat 
+                round 
+                dense 
+                icon="photo_camera" 
+                @click="showCameraModal = true"
+                class="camera-btn"
+              />
+            </template>
             <template v-slot:append>
               <q-icon name="qr_code_scanner" />
             </template>
@@ -564,6 +559,11 @@ function downloadUnauthorizedTxt() {
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <CameraScanner 
+      v-model="showCameraModal" 
+      @code-scanned="handleCodeScanned" 
+    />
 
     <footer>
       <p>Colector v1.0 - Mobile Ready</p>
@@ -764,6 +764,10 @@ main {
 
 .qty-input {
   width: 80px;
+}
+
+.camera-btn {
+  color: #1976D2;
 }
 
 footer {

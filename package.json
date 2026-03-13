@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@quasar/extras": "^1.16.0",
+    "html5-qrcode": "^2.3.8",
     "quasar": "^2.14.0",
     "vue": "^3.4.0",
     "vue-router": "^4.2.0"
