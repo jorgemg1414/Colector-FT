@@ -12,6 +12,7 @@ const inventoryName = computed(() => route.params.name)
 
 // Estados del escáner
 const skuInput = ref('')
+const skuInputRef = ref(null) // Referencia al input para enfocar
 const searchQuery = ref('')
 const inventory = reactive({})
 const showQuantityModal = ref(false)
@@ -211,6 +212,13 @@ function closeModal() {
   showQuantityModal.value = false
   tempSku.value = ''
   quantity.value = 1
+  
+  // Enfocar el input de escaneo después de cerrar el modal
+  setTimeout(() => {
+    if (skuInputRef.value && skuInputRef.value.focus) {
+      skuInputRef.value.focus()
+    }
+  }, 100)
 }
 
 function incrementItem(sku) {
@@ -376,6 +384,7 @@ function downloadUnauthorizedTxt() {
         <h2>Escanear SKU</h2>
         <div class="scanner-container">
           <q-input
+            ref="skuInputRef"
             v-model="skuInput"
             filled
             label="Apunte y escanee..."
