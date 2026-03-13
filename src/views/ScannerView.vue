@@ -568,7 +568,7 @@ body {
 header {
   background-color: #1976D2;
   color: white;
-  padding: 1rem;
+  padding: 0.5rem;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -587,7 +587,7 @@ header {
 
 header h1 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1rem;
   flex: 1;
   text-align: center;
 }
