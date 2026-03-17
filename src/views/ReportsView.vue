@@ -9,15 +9,18 @@ const $q = useQuasar()
 
 const inventoryName = computed(() => route.params.name)
 const inventory = ref({})
-const totalProducts = ref(0)
-const totalPieces = ref(0)
-const mostScannedProducts = ref([])
-const leastScannedProducts = ref([])
-const productsByCategory = ref([])
+const entradaSkus = ref({})
+const comparisonReport = ref({
+  found: [],
+  notFound: [],
+  extra: []
+})
 
 // Cargar inventario desde localStorage
 onMounted(() => {
   loadInventory()
+  loadEntradaSkus()
+  generateComparisonReport()
 })
 
 function loadInventory() {
@@ -28,18 +31,6 @@ function loadInventory() {
       
       if (data.inventories && data.inventories[inventoryName.value]) {
         inventory.value = data.inventories[inventoryName.value].inventory
-        
-        // Calcular totales
-        totalProducts.value = Object.keys(inventory.value).length
-        totalPieces.value = Object.values(inventory.value).reduce((sum, item) => sum + item.cantidad, 0)
-        
-        // Ordenar productos por cantidad (más escaneados primero)
-        const sortedProducts = Object.entries(inventory.value)
-          .map(([sku, item]) => ({ sku, ...item }))
-          .sort((a, b) => b.cantidad - a.cantidad)
-        
-        mostScannedProducts.value = sortedProducts.slice(0, 10)
-        leastScannedProducts.value = sortedProducts.slice(-10).reverse()
       }
     } catch (e) {
       console.error('Error loading inventory:', e)
@@ -47,19 +38,52 @@ function loadInventory() {
   }
 }
 
-function goBack() {
-  router.push(`/sku/${encodeURIComponent(inventoryName.value)}`)
+function loadEntradaSkus() {
+  const savedEntrada = localStorage.getItem('entradaSkus')
+  if (savedEntrada) {
+    try {
+      entradaSkus.value = JSON.parse(savedEntrada)
+    } catch (e) {
+      console.error('Error loading entrada SKUs:', e)
+    }
+  }
 }
 
-function formatDate(dateString) {
-  const date = new Date(dateString)
-  return date.toLocaleDateString('es-ES', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+function generateComparisonReport() {
+  const scannedSkus = Object.keys(inventory.value)
+  const entrada = entradaSkus.value
+  
+  // SKUs del traspaso que fueron encontrados
+  const found = Object.keys(entrada)
+    .filter(sku => scannedSkus.includes(sku))
+    .map(sku => ({
+      sku,
+      nombre: inventory.value[sku]?.nombre || 'Sin nombre',
+      cantidadEsperada: entrada[sku] || 0,
+      cantidadEscaneada: inventory.value[sku]?.cantidad || 0,
+      diferencia: (entrada[sku] || 0) - (inventory.value[sku]?.cantidad || 0)
+    }))
+  
+  // SKUs del traspaso que NO fueron encontrados
+  const notFound = Object.keys(entrada).filter(sku => !scannedSkus.includes(sku))
+    .map(sku => ({
+      sku,
+      cantidadEsperada: entrada[sku] || 0
+    }))
+  
+  // SKUs escaneados que no están en el traspaso
+  const extra = scannedSkus.filter(sku => !entrada[sku])
+    .map(sku => ({
+      sku,
+      nombre: inventory.value[sku]?.nombre || 'Sin nombre',
+      cantidadEscaneada: inventory.value[sku]?.cantidad || 0
+    }))
+  
+  comparisonReport.value = { found, notFound, extra }
+}
+
+function goBack() {
+  router.push(`/sku/${encodeURIComponent(inventoryName.value)}`)
 }
 </script>
 
@@ -68,111 +92,122 @@ function formatDate(dateString) {
     <header>
       <div class="header-content">
         <q-btn flat icon="arrow_back" @click="goBack" class="back-btn" />
-        <h1>Reportes - {{ inventoryName }}</h1>
+        <h1>Comparativa - {{ inventoryName }}</h1>
       </div>
     </header>
     
     <main>
-      <!-- Estadísticas generales -->
-      <section class="stats-section">
-        <h2>Estadísticas Generales</h2>
-        <div class="stats-grid">
-          <div class="stat-card">
-            <q-icon name="inventory" size="48px" color="primary" />
-            <div class="stat-info">
-              <span class="stat-value">{{ totalProducts }}</span>
-              <span class="stat-label">Productos únicos</span>
+      <!-- Comparación con Traspaso de Entrada -->
+      <section v-if="Object.keys(entradaSkus).length > 0" class="comparison-section">
+        <h2>Comparación con Traspaso de Entrada</h2>
+        
+        <!-- Resumen de comparación -->
+        <div class="comparison-summary">
+          <div class="summary-item found">
+            <q-icon name="check_circle" size="32px" color="positive" />
+            <div class="summary-text">
+              <span class="summary-value">{{ comparisonReport.found.length }}</span>
+              <span class="summary-label">Encontrados</span>
             </div>
           </div>
-          
-          <div class="stat-card">
-            <q-icon name="shopping_cart" size="48px" color="secondary" />
-            <div class="stat-info">
-              <span class="stat-value">{{ totalPieces }}</span>
-              <span class="stat-label">Total piezas</span>
+          <div class="summary-item not-found">
+            <q-icon name="highlight_off" size="32px" color="negative" />
+            <div class="summary-text">
+              <span class="summary-value">{{ comparisonReport.notFound.length }}</span>
+              <span class="summary-label">No encontrados</span>
             </div>
           </div>
-          
-          <div class="stat-card">
-            <q-icon name="trending_up" size="48px" color="positive" />
-            <div class="stat-info">
-              <span class="stat-value">{{ mostScannedProducts[0]?.cantidad || 0 }}</span>
-              <span class="stat-label">Más escaneado</span>
-            </div>
-          </div>
-          
-          <div class="stat-card">
-            <q-icon name="trending_down" size="48px" color="negative" />
-            <div class="stat-info">
-              <span class="stat-value">{{ leastScannedProducts[0]?.cantidad || 0 }}</span>
-              <span class="stat-label">Menos escaneado</span>
+          <div class="summary-item extra">
+            <q-icon name="add_circle" size="32px" color="warning" />
+            <div class="summary-text">
+              <span class="summary-value">{{ comparisonReport.extra.length }}</span>
+              <span class="summary-label">Extras</span>
             </div>
           </div>
         </div>
-      </section>
 
-      <!-- Productos más escaneados -->
-      <section class="top-products-section">
-        <h2>Productos más escaneados</h2>
-        <q-markup-table flat bordered>
-          <thead>
-            <tr>
-              <th class="text-left">Posición</th>
-              <th class="text-left">SKU</th>
-              <th class="text-left">Producto</th>
-              <th class="text-center">Cantidad</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(item, index) in mostScannedProducts" :key="item.sku">
-              <td class="text-center">
-                <q-badge :color="index === 0 ? 'yellow' : index === 1 ? 'grey' : index === 2 ? 'orange' : 'primary'">
-                  {{ index + 1 }}
-                </q-badge>
-              </td>
-              <td class="text-left">{{ item.sku }}</td>
-              <td class="text-left">{{ item.nombre }}</td>
-              <td class="text-center">
-                <q-badge color="primary" :label="item.cantidad" />
-              </td>
-            </tr>
-            <tr v-if="mostScannedProducts.length === 0">
-              <td colspan="4" class="text-center text-grey">
-                No hay productos en el inventario
-              </td>
-            </tr>
-          </tbody>
-        </q-markup-table>
-      </section>
+        <!-- SKUs del traspaso encontrados -->
+        <div v-if="comparisonReport.found.length > 0" class="comparison-part">
+          <h3>Encontrados ({{ comparisonReport.found.length }})</h3>
+          <q-markup-table flat bordered dense>
+            <thead>
+              <tr>
+                <th class="text-left">SKU</th>
+                <th class="text-left">Producto</th>
+                <th class="text-center">Esperada</th>
+                <th class="text-center">Escaneada</th>
+                <th class="text-center">Diferencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in comparisonReport.found" :key="item.sku">
+                <td class="text-left">{{ item.sku }}</td>
+                <td class="text-left">{{ item.nombre }}</td>
+                <td class="text-center">
+                  <q-badge color="grey">{{ item.cantidadEsperada }}</q-badge>
+                </td>
+                <td class="text-center">
+                  <q-badge color="positive">{{ item.cantidadEscaneada }}</q-badge>
+                </td>
+                <td class="text-center">
+                  <q-badge :color="item.diferencia === 0 ? 'positive' : item.diferencia > 0 ? 'negative' : 'warning'">
+                    {{ item.diferencia > 0 ? '-' : '+' }}{{ Math.abs(item.diferencia) }}
+                  </q-badge>
+                </td>
+              </tr>
+            </tbody>
+          </q-markup-table>
+        </div>
 
-      <!-- Productos menos escaneados -->
-      <section class="bottom-products-section">
-        <h2>Productos menos escaneados</h2>
-        <q-markup-table flat bordered>
-          <thead>
-            <tr>
-              <th class="text-left">Posición</th>
-              <th class="text-left">SKU</th>
-              <th class="text-left">Producto</th>
-              <th class="text-center">Cantidad</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(item, index) in leastScannedProducts" :key="item.sku">
-              <td class="text-center">{{ index + 1 }}</td>
-              <td class="text-left">{{ item.sku }}</td>
-              <td class="text-left">{{ item.nombre }}</td>
-              <td class="text-center">
-                <q-badge color="negative" :label="item.cantidad" />
-              </td>
-            </tr>
-            <tr v-if="leastScannedProducts.length === 0">
-              <td colspan="4" class="text-center text-grey">
-                No hay productos en el inventario
-              </td>
-            </tr>
-          </tbody>
-        </q-markup-table>
+        <!-- SKUs del traspaso NO encontrados -->
+        <div v-if="comparisonReport.notFound.length > 0" class="comparison-part">
+          <h3>No Encontrados ({{ comparisonReport.notFound.length }})</h3>
+          <q-markup-table flat bordered dense>
+            <thead>
+              <tr>
+                <th class="text-left">SKU</th>
+                <th class="text-center">Cant. Esperada</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in comparisonReport.notFound" :key="item.sku">
+                <td class="text-left">{{ item.sku }}</td>
+                <td class="text-center">
+                  <q-badge color="negative">{{ item.cantidadEsperada }}</q-badge>
+                </td>
+              </tr>
+            </tbody>
+          </q-markup-table>
+        </div>
+
+        <!-- SKUs extras (escaneados pero no en traspaso) -->
+        <div v-if="comparisonReport.extra.length > 0" class="comparison-part">
+          <h3>Extras - No están en Traslado ({{ comparisonReport.extra.length }})</h3>
+          <q-markup-table flat bordered dense>
+            <thead>
+              <tr>
+                <th class="text-left">SKU</th>
+                <th class="text-left">Producto</th>
+                <th class="text-center">Cant. Escaneada</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in comparisonReport.extra" :key="item.sku">
+                <td class="text-left">{{ item.sku }}</td>
+                <td class="text-left">{{ item.nombre }}</td>
+                <td class="text-center">
+                  <q-badge color="warning">{{ item.cantidadEscaneada }}</q-badge>
+                </td>
+              </tr>
+            </tbody>
+          </q-markup-table>
+        </div>
+
+        <!-- Mensaje cuando no hay traspaso cargado -->
+        <div v-if="Object.keys(entradaSkus).length === 0" class="no-traspaso">
+          <q-icon name="info" size="48px" color="grey" />
+          <p>No hay Traslado de Entrada cargado</p>
+        </div>
       </section>
     </main>
   </div>
@@ -225,76 +260,103 @@ main {
   padding: 15px;
 }
 
-.stats-section {
+.comparison-section {
   margin-bottom: 20px;
 }
 
-.stats-section h2 {
+.comparison-section h2 {
   font-size: 1.1rem;
   margin-bottom: 15px;
   color: #1976D2;
 }
 
-body.body--dark .stats-section h2 {
+body.body--dark .comparison-section h2 {
   color: #64b5f6;
 }
 
-.stats-grid {
+.comparison-summary {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 15px;
+  margin-bottom: 20px;
 }
 
-.stat-card {
+.summary-item {
   background: white;
   padding: 15px;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 12px;
 }
 
-body.body--dark .stat-card {
+body.body--dark .summary-item {
   background: #1e1e1e;
 }
 
-.stat-info {
+.summary-text {
   display: flex;
   flex-direction: column;
 }
 
-.stat-value {
+.summary-text .summary-value {
   font-size: 1.5rem;
   font-weight: bold;
   color: #333;
 }
 
-body.body--dark .stat-value {
+body.body--dark .summary-text .summary-value {
   color: #e0e0e0;
 }
 
-.stat-label {
+.summary-text .summary-label {
   font-size: 0.8rem;
   color: #666;
 }
 
-body.body--dark .stat-label {
+body.body--dark .summary-text .summary-label {
   color: #aaaaaa;
 }
 
-.top-products-section, .bottom-products-section {
+.summary-item.found .summary-value {
+  color: #2e7d32;
+}
+
+.summary-item.not-found .summary-value {
+  color: #c62828;
+}
+
+.summary-item.extra .summary-value {
+  color: #f57c00;
+}
+
+.comparison-part {
   margin-bottom: 20px;
 }
 
-.top-products-section h2, .bottom-products-section h2 {
-  font-size: 1rem;
+.comparison-part h3 {
+  font-size: 0.95rem;
   margin-bottom: 10px;
   color: #555;
+  margin-top: 15px;
 }
 
-body.body--dark .top-products-section h2,
-body.body--dark .bottom-products-section h2 {
+body.body--dark .comparison-part h3 {
   color: #aaaaaa;
+}
+
+.no-traspaso {
+  text-align: center;
+  padding: 30px;
+  color: #999;
+}
+
+body.body--dark .no-traspaso {
+  color: #777;
+}
+
+.no-traspaso p {
+  margin-top: 10px;
 }
 </style>

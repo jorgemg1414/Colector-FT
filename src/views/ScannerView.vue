@@ -3,11 +3,15 @@ import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import CameraScanner from '../components/CameraScanner.vue'
+import { useProductStore } from '../stores/products'
+import { useFileStore } from '../stores/file'
 import * as XLSX from 'xlsx'
 
 const route = useRoute()
 const router = useRouter()
 const $q = useQuasar()
+const productStore = useProductStore()
+const fileStore = useFileStore()
 
 // Obtener el nombre del inventario de la ruta
 const inventoryName = computed(() => route.params.name)
@@ -21,14 +25,17 @@ const showQuantityModal = ref(false)
 const tempSku = ref('')
 const quantity = ref(1)
 const tempProductName = ref('')
+const tempIsInEntrada = ref(false)
 const editingSku = ref(null) // Para edición directa
 const showCameraModal = ref(false)
+const loading = ref(false)
+const fileInputRef = ref(null)
 
 // Base de datos vacía - permite cualquier SKU
 const productsDB = {}
 
-// Lista de SKUs permitidos (cargada desde localStorage)
-const allowedSkus = ref([])
+// Lista de SKUs de traspaso de entrada (cargada desde archivo)
+const entradaSkus = ref([])
 
 // Computed para el total de piezas
 const totalPiezas = computed(() => {
@@ -103,15 +110,66 @@ const loadFromStorage = () => {
     }
   }
   
-  // Cargar lista de SKUs permitidos
-  const savedSkus = localStorage.getItem('allowedSkus')
-  if (savedSkus) {
+  // Cargar lista de SKUs de traspaso de entrada
+  const savedEntrada = localStorage.getItem('entradaSkus')
+  if (savedEntrada) {
     try {
-      allowedSkus.value = JSON.parse(savedSkus)
+      entradaSkus.value = JSON.parse(savedEntrada)
     } catch (e) {
-      console.error('Error loading allowed SKUs:', e)
+      console.error('Error loading entrada SKUs:', e)
     }
   }
+}
+
+function triggerFileInput() {
+  fileInputRef.value?.click()
+}
+
+function handleFileUpload(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const content = e.target?.result
+    if (typeof content === 'string') {
+      const lines = content.split('\n')
+      const entradaData = {}
+      
+      lines.forEach(line => {
+        const trimmed = line.trim().toUpperCase()
+        if (!trimmed) return
+        
+        const parts = trimmed.split(',')
+        const sku = parts[0].trim()
+        const cantidad = parts[1] ? parseInt(parts[1].trim()) : 0
+        
+        if (sku) {
+          entradaData[sku] = cantidad
+        }
+      })
+      
+      entradaSkus.value = entradaData
+      localStorage.setItem('entradaSkus', JSON.stringify(entradaData))
+      $q.notify({
+        type: 'positive',
+        message: `${Object.keys(entradaData).length} SKUs cargados para traspaso de entrada.`,
+        position: 'top'
+      })
+    }
+  }
+  reader.readAsText(file)
+  event.target.value = ''
+}
+
+function clearEntradaSkus() {
+  entradaSkus.value = []
+  localStorage.removeItem('entradaSkus')
+  $q.notify({
+    type: 'info',
+    message: 'Lista de traspaso de entrada limpiada.',
+    position: 'top'
+  })
 }
 
 // Observar cambios para guardar automáticamente
@@ -127,31 +185,33 @@ onMounted(() => {
 })
 
 // Funciones del Escáner
-function addItem() {
+async function addItem() {
   const input = skuInput.value.trim().toUpperCase()
   if (!input) return
 
-  let sku = input
-  let productName = 'Producto Sin Nombre'
-  let isAllowed = true
+  loading.value = true
   
-  // Verificar si hay una lista de SKUs permitidos
-  if (allowedSkus.value.length > 0) {
-    // Si el SKU no está en la lista de permitidos
-    if (!allowedSkus.value.includes(sku)) {
-      isAllowed = false
-      // Registrar el SKU no permitido
-      logUnauthorizedSku(sku)
+  try {
+    let sku = input
+    let productName = 'Producto Sin Nombre'
+    let isInEntrada = false
+    
+    // Verificar si el SKU está en el traspaso de entrada
+    if (Object.keys(entradaSkus.value).length > 0) {
+      isInEntrada = sku in entradaSkus.value
     }
+    
+    // Consumir API para obtener descripción
+    const descrip = await productStore.fetchProductDescription(sku)
+    if (descrip) {
+      productName = descrip
+    }
+    
+    // Agregar el producto al inventario
+    addProductToInventory(sku, productName, isInEntrada)
+  } finally {
+    loading.value = false
   }
-  
-  // Si el SKU existe en la base de datos, usar su nombre
-  if (productsDB[sku]) {
-    productName = productsDB[sku]
-  }
-  
-  // Agregar el producto al inventario (se agrega siempre, permitido o no)
-  addProductToInventory(sku, productName)
 }
 
 function logUnauthorizedSku(sku) {
@@ -182,10 +242,13 @@ function logUnauthorizedSku(sku) {
   localStorage.setItem('unauthorizedSkus', JSON.stringify(unauthorizedSkus))
 }
 
-function addProductToInventory(sku, productName) {
+function addProductToInventory(sku, productName, isInEntrada = false) {
   // Guardar el SKU y nombre temporalmente
   tempSku.value = sku
   tempProductName.value = productName
+  
+  // Guardar si está en traspaso de entrada para usar en confirmQuantity
+  tempIsInEntrada.value = isInEntrada
   
   // Mostrar el modal para ingresar cantidad
   showQuantityModal.value = true
@@ -205,7 +268,8 @@ function confirmQuantity() {
   } else {
     inventory[sku] = {
       nombre: tempProductName.value,
-      cantidad: qty
+      cantidad: qty,
+      enEntrada: tempIsInEntrada.value
     }
   }
 
@@ -300,6 +364,33 @@ function downloadTxt() {
     message: `Archivo ${fileName} descargado.`,
     position: 'top'
   })
+}
+
+async function sendToServer() {
+  if (Object.keys(inventory).length === 0) {
+    $q.notify({
+      type: 'warning',
+      message: 'No hay productos para enviar.',
+      position: 'top'
+    })
+    return
+  }
+
+  const result = await fileStore.uploadInventoryFile(inventory, inventoryName.value)
+  
+  if (result.success) {
+    $q.notify({
+      type: 'positive',
+      message: 'Inventario enviado al servidor correctamente.',
+      position: 'top'
+    })
+  } else {
+    $q.notify({
+      type: 'negative',
+      message: `Error al enviar: ${result.error}`,
+      position: 'top'
+    })
+  }
 }
 
 function downloadExcel() {
@@ -448,6 +539,7 @@ function goToReports() {
             @keyup.enter="addItem"
             autofocus
             class="sku-input"
+            :disable="loading"
           >
             <template v-slot:prepend>
               <q-btn 
@@ -457,13 +549,15 @@ function goToReports() {
                 icon="photo_camera" 
                 @click="showCameraModal = true"
                 class="camera-btn"
+                :disable="loading"
               />
             </template>
             <template v-slot:append>
-              <q-icon name="qr_code_scanner" />
+              <q-spinner-dots v-if="loading" color="primary" size="24px" />
+              <q-icon v-else name="qr_code_scanner" />
             </template>
           </q-input>
-          <q-btn color="primary" label="OK" @click="addItem" class="scan-btn" />
+          <q-btn color="primary" label="OK" @click="addItem" class="scan-btn" :loading="loading" />
         </div>
       </section>
 
@@ -481,10 +575,15 @@ function goToReports() {
         </div>
       </section>
       
-      <!-- Indicador de SKUs Permitidos -->
-      <div v-if="allowedSkus.length > 0" class="allowed-skus-indicator">
-        <q-icon name="check_circle" color="positive" />
-        <span>Lista de SKUs permitidos activa ({{ allowedSkus.length }} items)</span>
+      <!-- Indicador de Transpaso de Entrada -->
+      <div class="entrada-section">
+        <div v-if="Object.keys(entradaSkus).length > 0" class="entrada-indicator">
+          <q-icon name="check_circle" color="positive" />
+          <span>Transpaso de entrada activo ({{ Object.keys(entradaSkus).length }} items)</span>
+          <q-btn flat dense icon="close" size="sm" @click="clearEntradaSkus" color="negative" />
+        </div>
+        <q-btn v-else outline color="primary" icon="upload_file" label="Cargar traspaso de entrada" @click="triggerFileInput" size="sm" />
+        <input ref="fileInputRef" type="file" accept=".txt" style="display: none" @change="handleFileUpload" />
       </div>
 
       <!-- Búsqueda -->
@@ -513,38 +612,41 @@ function goToReports() {
       <section class="inventory-section">
         <div class="section-header">
           <h2>Inventario ({{ Object.keys(filteredInventory).length }} items)</h2>
-          <div class="download-buttons">
-            <q-btn 
-              color="secondary" 
-              icon="download" 
-              label="TXT" 
-              @click="downloadTxt" 
-              size="sm"
-              :disable="Object.keys(inventory).length === 0"
-            />
-            <q-btn 
-              color="primary" 
-              icon="table_view" 
-              label="Excel" 
-              @click="downloadExcel" 
-              size="sm"
-              :disable="Object.keys(inventory).length === 0"
-            />
+          <div class="actions-container">
+            <div class="download-buttons">
+              <q-btn 
+                color="secondary" 
+                icon="download" 
+                label="TXT" 
+                @click="downloadTxt" 
+                size="sm"
+                :disable="Object.keys(inventory).length === 0"
+              />
+              <q-btn 
+                color="primary" 
+                icon="table_view" 
+                label="Excel" 
+                @click="downloadExcel" 
+                size="sm"
+                :disable="Object.keys(inventory).length === 0"
+              />
+              <q-btn 
+                color="positive" 
+                icon="cloud_upload" 
+                label="Enviar al servidor" 
+                @click="sendToServer" 
+                size="sm"
+                :loading="fileStore.uploading"
+                :disable="Object.keys(inventory).length === 0"
+              />
+            </div>
             <q-btn 
               color="accent" 
-              icon="bar_chart" 
-              label="Reportes" 
+              icon="compare_arrows" 
+              label="Comparativa" 
               @click="goToReports" 
-              size="sm"
+              class="comparativa-btn"
               :disable="Object.keys(inventory).length === 0"
-            />
-            <q-btn 
-              color="negative" 
-              icon="download" 
-              label="No Permitidos" 
-              @click="downloadUnauthorizedTxt" 
-              size="sm"
-              outline
             />
           </div>
         </div>
@@ -801,7 +903,11 @@ body.body--dark .summary-value {
   font-size: 1.4rem;
 }
 
-.allowed-skus-indicator {
+.entrada-section {
+  margin-bottom: 15px;
+}
+
+.entrada-indicator {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -809,7 +915,6 @@ body.body--dark .summary-value {
   color: #2e7d32;
   padding: 8px 12px;
   border-radius: 8px;
-  margin-bottom: 15px;
   font-size: 0.9rem;
 }
 
@@ -824,11 +929,23 @@ body.body--dark .summary-value {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.actions-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .download-buttons {
   display: flex;
   gap: 5px;
+}
+
+.comparativa-btn {
+  font-weight: bold;
 }
 
 .inventory-section h2 {
