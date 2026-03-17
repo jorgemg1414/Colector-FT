@@ -8,13 +8,10 @@ const $q = useQuasar()
 
 const inventoryName = ref('')
 const inventories = ref([])
-const allowedSkus = ref([]) // Lista de SKUs permitidos
-const file = ref(null) // Archivo seleccionado
 
 // Cargar datos guardados al iniciar
 onMounted(() => {
   loadInventories()
-  loadAllowedSkus()
   // Limpiar el campo de nombre al iniciar/recargar
   inventoryName.value = ''
 })
@@ -130,76 +127,8 @@ function formatDate(dateString) {
   })
 }
 
-function loadAllowedSkus() {
-  const savedSkus = localStorage.getItem('allowedSkus')
-  if (savedSkus) {
-    try {
-      allowedSkus.value = JSON.parse(savedSkus)
-    } catch (e) {
-      console.error('Error loading allowed SKUs:', e)
-    }
-  }
-}
-
 function toggleDarkMode() {
   $q.dark.toggle()
-}
-
-function handleFileUpload(selectedFile) {
-  if (!selectedFile) return
-
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    const content = e.target.result
-    // Dividir por líneas y limpiar espacios
-    const skus = content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-    
-    if (skus.length > 0) {
-      allowedSkus.value = skus
-      localStorage.setItem('allowedSkus', JSON.stringify(skus))
-      $q.notify({
-        type: 'positive',
-        message: `Se cargaron ${skus.length} SKUs permitidos.`,
-        position: 'top'
-      })
-    } else {
-      $q.notify({
-        type: 'warning',
-        message: 'El archivo está vacío o no contiene SKUs válidos.',
-        position: 'top'
-      })
-    }
-  }
-  
-  reader.onerror = () => {
-    $q.notify({
-      type: 'negative',
-      message: 'Error al leer el archivo.',
-      position: 'top'
-    })
-  }
-  
-  reader.readAsText(selectedFile)
-}
-
-function clearAllowedSkus() {
-  $q.dialog({
-    title: 'Eliminar SKUs Permitidos',
-    message: '¿Estás seguro de que quieres eliminar la lista de SKUs permitidos?',
-    cancel: true,
-    ok: 'Eliminar'
-  }).onOk(() => {
-    allowedSkus.value = []
-    localStorage.removeItem('allowedSkus')
-    $q.notify({
-      type: 'positive',
-      message: 'Lista de SKUs permitidos eliminada.',
-      position: 'top'
-    })
-  })
 }
 </script>
 
@@ -239,40 +168,6 @@ function clearAllowedSkus() {
           class="start-btn"
           size="lg"
         />
-      </div>
-
-      <!-- Sección de carga de archivo de SKUs -->
-      <div class="history-card">
-        <h2>Lista de SKUs Permitidos</h2>
-        <p class="text-grey">
-          Carga un archivo .txt con un SKU por línea para comparar al escanear.
-          <span v-if="allowedSkus.length > 0">({{ allowedSkus.length }} SKUs cargados)</span>
-        </p>
-        
-        <div class="file-upload-section">
-          <q-file
-            v-model="file"
-            filled
-            label="Seleccionar archivo .txt"
-            accept=".txt"
-            @update:model-value="handleFileUpload"
-            class="file-input"
-          >
-            <template v-slot:prepend>
-              <q-icon name="attach_file" />
-            </template>
-          </q-file>
-          
-          <q-btn 
-            v-if="allowedSkus.length > 0"
-            flat 
-            color="negative" 
-            label="Eliminar Lista" 
-            @click="clearAllowedSkus"
-            size="sm"
-            class="q-ml-md"
-          />
-        </div>
       </div>
 
       <!-- Sección de historial de inventarios -->
