@@ -97,6 +97,14 @@ function goBack() {
     </header>
     
     <main>
+      <!-- Sin traspaso cargado -->
+      <div v-if="Object.keys(entradaSkus).length === 0" class="no-traspaso">
+        <q-icon name="upload_file" size="56px" color="grey-5" />
+        <p>No hay Traspaso de Entrada cargado</p>
+        <p class="no-traspaso-hint">Vuelve al inventario y carga un archivo de traspaso para ver la comparativa</p>
+        <q-btn outline color="primary" label="Volver al inventario" icon="arrow_back" @click="goBack" />
+      </div>
+
       <!-- Comparación con Traspaso de Entrada -->
       <section v-if="Object.keys(entradaSkus).length > 0" class="comparison-section">
         <h2>Comparación con Traspaso de Entrada</h2>
@@ -203,11 +211,6 @@ function goBack() {
           </q-markup-table>
         </div>
 
-        <!-- Mensaje cuando no hay traspaso cargado -->
-        <div v-if="Object.keys(entradaSkus).length === 0" class="no-traspaso">
-          <q-icon name="info" size="48px" color="grey" />
-          <p>No hay Traslado de Entrada cargado</p>
-        </div>
       </section>
     </main>
   </div>
@@ -348,8 +351,12 @@ body.body--dark .comparison-part h3 {
 
 .no-traspaso {
   text-align: center;
-  padding: 30px;
+  padding: 50px 20px;
   color: #999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
 body.body--dark .no-traspaso {
@@ -357,6 +364,13 @@ body.body--dark .no-traspaso {
 }
 
 .no-traspaso p {
-  margin-top: 10px;
+  margin: 0;
+}
+
+.no-traspaso-hint {
+  font-size: 0.85rem;
+  color: #bbb;
+  max-width: 280px;
+  line-height: 1.4;
 }
 </style>

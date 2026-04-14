@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch, onMounted, computed } from 'vue'
+import { ref, reactive, watch, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import CameraScanner from '../components/CameraScanner.vue'
@@ -13,12 +13,11 @@ const $q = useQuasar()
 const productStore = useProductStore()
 const fileStore = useFileStore()
 
-// Obtener el nombre del inventario de la ruta
 const inventoryName = computed(() => route.params.name)
 
 // Estados del escáner
 const skuInput = ref('')
-const skuInputRef = ref(null) // Referencia al input para enfocar
+const skuInputRef = ref(null)
 const searchQuery = ref('')
 const inventory = reactive({})
 const showQuantityModal = ref(false)
@@ -26,101 +25,176 @@ const tempSku = ref('')
 const quantity = ref(1)
 const tempProductName = ref('')
 const tempIsInEntrada = ref(false)
-const editingSku = ref(null) // Para edición directa
+const editingSku = ref(null)
 const showCameraModal = ref(false)
 const loading = ref(false)
 const fileInputRef = ref(null)
+const qtyInputRef = ref(null)
 
-// Base de datos vacía - permite cualquier SKU
-const productsDB = {}
+// SKUs de traspaso de entrada
+const entradaSkus = ref({})
 
-// Lista de SKUs de traspaso de entrada (cargada desde archivo)
-const entradaSkus = ref([])
+// ── Nuevas features ──────────────────────────────────────────
+// Modo rápido: suma 1 sin mostrar modal de cantidad
+const fastScanMode = ref(false)
 
-// Computed para el total de piezas
-const totalPiezas = computed(() => {
-  return Object.values(inventory).reduce((sum, item) => sum + item.cantidad, 0)
-})
+// Conexión a base de datos de productos
+const useDatabase = ref(false)
 
-// Computed para productos filtrados
+// Deshacer último escaneo
+const lastAction = ref(null) // { sku, productName, wasNew, previousQty }
+
+// Flash visual al escanear
+const scanFlash = ref('') // 'success' | 'error' | ''
+
+// Historial de acciones
+const actionHistory = ref([])
+const showHistoryModal = ref(false)
+// ─────────────────────────────────────────────────────────────
+
+// ── Computed ──────────────────────────────────────────────────
+const totalPiezas = computed(() =>
+  Object.values(inventory).reduce((sum, item) => sum + item.cantidad, 0)
+)
+
 const filteredInventory = computed(() => {
-  if (!searchQuery.value.trim()) {
-    return inventory
-  }
-  
+  if (!searchQuery.value.trim()) return inventory
   const query = searchQuery.value.toLowerCase()
   const filtered = {}
-  
   for (const [sku, item] of Object.entries(inventory)) {
-    if (sku.toLowerCase().includes(query) || 
-        item.nombre.toLowerCase().includes(query)) {
+    if (sku.toLowerCase().includes(query) || item.nombre.toLowerCase().includes(query)) {
       filtered[sku] = item
     }
   }
-  
   return filtered
 })
+// ─────────────────────────────────────────────────────────────
 
-// Función para guardar en localStorage
+// ── Sonido ────────────────────────────────────────────────────
+function playBeep(success = true) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const oscillator = ctx.createOscillator()
+    const gainNode = ctx.createGain()
+    oscillator.connect(gainNode)
+    gainNode.connect(ctx.destination)
+    if (success) {
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime)
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
+      oscillator.start(ctx.currentTime)
+      oscillator.stop(ctx.currentTime + 0.15)
+    } else {
+      oscillator.frequency.setValueAtTime(220, ctx.currentTime)
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
+      oscillator.start(ctx.currentTime)
+      oscillator.stop(ctx.currentTime + 0.4)
+    }
+  } catch (e) {
+    // Audio no soportado, continuar sin sonido
+  }
+}
+// ─────────────────────────────────────────────────────────────
+
+// ── Vibración ─────────────────────────────────────────────────
+function vibrate(success = true) {
+  if ('vibrate' in navigator) {
+    navigator.vibrate(success ? 50 : [100, 50, 100])
+  }
+}
+// ─────────────────────────────────────────────────────────────
+
+// ── Flash visual ──────────────────────────────────────────────
+function triggerFlash(success = true) {
+  scanFlash.value = success ? 'success' : 'error'
+  setTimeout(() => { scanFlash.value = '' }, 300)
+}
+// ─────────────────────────────────────────────────────────────
+
+// ── Historial ─────────────────────────────────────────────────
+function addToHistory(entry) {
+  actionHistory.value.unshift({ ...entry, timestamp: new Date().toISOString() })
+  if (actionHistory.value.length > 100) {
+    actionHistory.value = actionHistory.value.slice(0, 100)
+  }
+  saveHistoryToStorage()
+}
+
+function saveHistoryToStorage() {
+  localStorage.setItem(`history_${inventoryName.value}`, JSON.stringify(actionHistory.value))
+}
+
+function loadHistoryFromStorage() {
+  const saved = localStorage.getItem(`history_${inventoryName.value}`)
+  if (!saved) return
+  try { actionHistory.value = JSON.parse(saved) } catch (e) {}
+}
+
+function formatHistoryTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString('es-ES', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  })
+}
+// ─────────────────────────────────────────────────────────────
+
+// ── Deshacer último escaneo ───────────────────────────────────
+function undoLastScan() {
+  if (!lastAction.value) return
+  const { sku, productName, wasNew, previousQty } = lastAction.value
+
+  if (wasNew) {
+    delete inventory[sku]
+  } else {
+    inventory[sku].cantidad = previousQty
+  }
+
+  addToHistory({ sku, productName, quantity: 0, action: 'undo' })
+  lastAction.value = null
+
+  $q.notify({ type: 'warning', message: 'Último escaneo deshecho.', position: 'top' })
+  nextTick(() => { skuInputRef.value?.focus() })
+}
+// ─────────────────────────────────────────────────────────────
+
+// ── Storage ───────────────────────────────────────────────────
 const saveToStorage = () => {
   const savedData = localStorage.getItem('colectorData')
   let data = {}
-  
   if (savedData) {
-    try {
-      data = JSON.parse(savedData)
-    } catch (e) {
-      console.error('Error parsing saved data:', e)
-    }
+    try { data = JSON.parse(savedData) } catch (e) {}
   }
-  
-  // Actualizar solo el inventario actual (usando el nombre como clave)
-  if (!data.inventories) {
-    data.inventories = {}
-  }
-  
+  if (!data.inventories) data.inventories = {}
   data.inventories[inventoryName.value] = {
     name: inventoryName.value,
     inventory: { ...inventory },
     lastModified: new Date().toISOString()
   }
-  
-  // Guardar también el nombre actual para el home
   data.inventoryName = inventoryName.value
-  
   localStorage.setItem('colectorData', JSON.stringify(data))
 }
 
-// Función para cargar desde localStorage
 const loadFromStorage = () => {
   const savedData = localStorage.getItem('colectorData')
   if (savedData) {
     try {
       const data = JSON.parse(savedData)
-      
-      // Cargar inventario específico si existe
       if (data.inventories && data.inventories[inventoryName.value]) {
         const savedInventory = data.inventories[inventoryName.value].inventory
         Object.keys(savedInventory).forEach(key => {
           inventory[key] = savedInventory[key]
         })
       }
-    } catch (e) {
-      console.error('Error loading data:', e)
-    }
+    } catch (e) {}
   }
-  
-  // Cargar lista de SKUs de traspaso de entrada
   const savedEntrada = localStorage.getItem('entradaSkus')
   if (savedEntrada) {
-    try {
-      entradaSkus.value = JSON.parse(savedEntrada)
-    } catch (e) {
-      console.error('Error loading entrada SKUs:', e)
-    }
+    try { entradaSkus.value = JSON.parse(savedEntrada) } catch (e) {}
   }
 }
+// ─────────────────────────────────────────────────────────────
 
+// ── Traspaso de entrada ───────────────────────────────────────
 function triggerFileInput() {
   fileInputRef.value?.click()
 }
@@ -128,140 +202,133 @@ function triggerFileInput() {
 function handleFileUpload(event) {
   const file = event.target.files?.[0]
   if (!file) return
-
   const reader = new FileReader()
   reader.onload = (e) => {
     const content = e.target?.result
-    if (typeof content === 'string') {
-      const lines = content.split('\n')
-      const entradaData = {}
-      
-      lines.forEach(line => {
-        const trimmed = line.trim().toUpperCase()
-        if (!trimmed) return
-        
-        const parts = trimmed.split(',')
-        const sku = parts[0].trim()
-        const cantidad = parts[1] ? parseInt(parts[1].trim()) : 0
-        
-        if (sku) {
-          entradaData[sku] = cantidad
-        }
-      })
-      
-      entradaSkus.value = entradaData
-      localStorage.setItem('entradaSkus', JSON.stringify(entradaData))
-      $q.notify({
-        type: 'positive',
-        message: `${Object.keys(entradaData).length} SKUs cargados para traspaso de entrada.`,
-        position: 'top'
-      })
-    }
+    if (typeof content !== 'string') return
+    const lines = content.split('\n')
+    const entradaData = {}
+    lines.forEach(line => {
+      const trimmed = line.trim().toUpperCase()
+      if (!trimmed) return
+      const parts = trimmed.split(',')
+      const sku = parts[0].trim()
+      const cantidad = parts[1] ? parseInt(parts[1].trim()) : 0
+      if (sku) entradaData[sku] = cantidad
+    })
+    entradaSkus.value = entradaData
+    localStorage.setItem('entradaSkus', JSON.stringify(entradaData))
+    $q.notify({
+      type: 'positive',
+      message: `${Object.keys(entradaData).length} SKUs cargados para traspaso de entrada.`,
+      position: 'top'
+    })
   }
   reader.readAsText(file)
   event.target.value = ''
 }
 
 function clearEntradaSkus() {
-  entradaSkus.value = []
+  entradaSkus.value = {}
   localStorage.removeItem('entradaSkus')
-  $q.notify({
-    type: 'info',
-    message: 'Lista de traspaso de entrada limpiada.',
-    position: 'top'
-  })
+  $q.notify({ type: 'info', message: 'Lista de traspaso de entrada limpiada.', position: 'top' })
 }
+// ─────────────────────────────────────────────────────────────
 
-// Observar cambios para guardar automáticamente
-watch(inventory, () => {
-  saveToStorage()
-}, { deep: true })
+// ── Watchers ──────────────────────────────────────────────────
+watch(inventory, () => { saveToStorage() }, { deep: true })
 
-// Watcher para buscar en tiempo real
-
-// Cargar datos al iniciar
-onMounted(() => {
-  loadFromStorage()
+watch(fastScanMode, (val) => {
+  localStorage.setItem('fastScanMode', val.toString())
 })
 
-// Funciones del Escáner
+watch(useDatabase, (val) => {
+  localStorage.setItem('useDatabase', val.toString())
+})
+// ─────────────────────────────────────────────────────────────
+
+// ── onMounted ─────────────────────────────────────────────────
+onMounted(() => {
+  loadFromStorage()
+  loadHistoryFromStorage()
+  const savedFastMode = localStorage.getItem('fastScanMode')
+  if (savedFastMode !== null) {
+    fastScanMode.value = savedFastMode === 'true'
+  }
+  const savedUseDatabase = localStorage.getItem('useDatabase')
+  if (savedUseDatabase !== null) {
+    useDatabase.value = savedUseDatabase === 'true'
+  }
+})
+// ─────────────────────────────────────────────────────────────
+
+// ── Lógica de escaneo ─────────────────────────────────────────
 async function addItem() {
   const input = skuInput.value.trim().toUpperCase()
   if (!input) return
-
   loading.value = true
-  
   try {
-    let sku = input
-    let productName = 'Producto Sin Nombre'
+    const sku = input
     let isInEntrada = false
-    
-    // Verificar si el SKU está en el traspaso de entrada
     if (Object.keys(entradaSkus.value).length > 0) {
       isInEntrada = sku in entradaSkus.value
     }
-    
-    // Consumir API para obtener descripción
-    const descrip = await productStore.fetchProductDescription(sku)
-    if (descrip) {
-      productName = descrip
+
+    let productName = sku
+    if (useDatabase.value) {
+      const descrip = await productStore.fetchProductDescription(sku)
+      if (descrip === null) {
+        $q.notify({
+          type: 'warning',
+          message: `SKU ${sku}: sin descripción en la base de datos`,
+          position: 'top',
+          timeout: 2000
+        })
+      }
+      productName = descrip || sku
     }
-    
-    // Agregar el producto al inventario
+
     addProductToInventory(sku, productName, isInEntrada)
   } finally {
     loading.value = false
   }
 }
 
-function logUnauthorizedSku(sku) {
-  // Obtener los SKUs no autorizados guardados
-  const savedUnauthorized = localStorage.getItem('unauthorizedSkus')
-  let unauthorizedSkus = []
-  
-  if (savedUnauthorized) {
-    try {
-      unauthorizedSkus = JSON.parse(savedUnauthorized)
-    } catch (e) {
-      console.error('Error parsing unauthorized SKUs:', e)
-    }
-  }
-  
-  // Añadir el nuevo SKU con fecha
-  unauthorizedSkus.push({
-    sku: sku,
-    timestamp: new Date().toISOString(),
-    inventoryName: inventoryName.value
-  })
-  
-  // Guardar de nuevo (limitar a los últimos 1000 para no llenar el storage)
-  if (unauthorizedSkus.length > 1000) {
-    unauthorizedSkus = unauthorizedSkus.slice(-1000)
-  }
-  
-  localStorage.setItem('unauthorizedSkus', JSON.stringify(unauthorizedSkus))
-}
-
 function addProductToInventory(sku, productName, isInEntrada = false) {
-  // Guardar el SKU y nombre temporalmente
-  tempSku.value = sku
-  tempProductName.value = productName
-  
-  // Guardar si está en traspaso de entrada para usar en confirmQuantity
-  tempIsInEntrada.value = isInEntrada
-  
-  // Mostrar el modal para ingresar cantidad
-  showQuantityModal.value = true
-  
-  // Resetear cantidad a 1 por defecto
-  quantity.value = 1
-  
-  skuInput.value = ''
+  if (fastScanMode.value) {
+    // Modo rápido: suma 1 directo sin modal
+    const wasNew = !inventory[sku]
+    const previousQty = inventory[sku]?.cantidad ?? 0
+
+    if (inventory[sku]) {
+      inventory[sku].cantidad += 1
+    } else {
+      inventory[sku] = { nombre: productName, cantidad: 1, enEntrada: isInEntrada }
+    }
+
+    lastAction.value = { sku, productName, wasNew, previousQty }
+    addToHistory({ sku, productName, quantity: 1, action: wasNew ? 'add' : 'increment' })
+    playBeep(true)
+    vibrate(true)
+    triggerFlash(true)
+    skuInput.value = ''
+    nextTick(() => { skuInputRef.value?.focus() })
+  } else {
+    // Modo normal: mostrar modal de cantidad
+    tempSku.value = sku
+    tempProductName.value = productName
+    tempIsInEntrada.value = isInEntrada
+    quantity.value = 1
+    skuInput.value = ''
+    showQuantityModal.value = true
+  }
 }
 
 function confirmQuantity() {
   const sku = tempSku.value
   const qty = parseInt(quantity.value) || 1
+  const wasNew = !inventory[sku]
+  const previousQty = inventory[sku]?.cantidad ?? 0
 
   if (inventory[sku]) {
     inventory[sku].cantidad += qty
@@ -273,28 +340,41 @@ function confirmQuantity() {
     }
   }
 
+  lastAction.value = { sku, productName: tempProductName.value, wasNew, previousQty }
+  addToHistory({ sku, productName: tempProductName.value, quantity: qty, action: wasNew ? 'add' : 'increment' })
+  playBeep(true)
+  vibrate(true)
+  triggerFlash(true)
+
   closeModal()
+}
+
+function cancelQuantity() {
+  showQuantityModal.value = false
+  tempSku.value = ''
+  quantity.value = 1
+  nextTick(() => { skuInputRef.value?.focus() })
 }
 
 function closeModal() {
   showQuantityModal.value = false
   tempSku.value = ''
   quantity.value = 1
+  nextTick(() => { skuInputRef.value?.focus() })
 }
+// ─────────────────────────────────────────────────────────────
 
+// ── Acciones de tabla ─────────────────────────────────────────
 function incrementItem(sku) {
-  if (inventory[sku]) {
-    inventory[sku].cantidad += 1
-  }
+  if (inventory[sku]) inventory[sku].cantidad += 1
 }
 
 function decrementItem(sku) {
-  if (inventory[sku]) {
-    if (inventory[sku].cantidad > 1) {
-      inventory[sku].cantidad -= 1
-    } else {
-      removeItem(sku)
-    }
+  if (!inventory[sku]) return
+  if (inventory[sku].cantidad > 1) {
+    inventory[sku].cantidad -= 1
+  } else {
+    removeItem(sku)
   }
 }
 
@@ -304,215 +384,97 @@ function removeItem(sku) {
     message: `¿Estás seguro de eliminar ${inventory[sku].nombre}?`,
     cancel: true,
     ok: 'Eliminar'
-  }).onOk(() => {
-    delete inventory[sku]
-  })
+  }).onOk(() => { delete inventory[sku] })
 }
 
-// Función para editar cantidad directamente
 function startEditQuantity(sku) {
   editingSku.value = sku
-}
-
-function saveEditQuantity(sku, event) {
-  const newValue = parseInt(event.target.value)
-  if (newValue && newValue > 0) {
-    inventory[sku].cantidad = newValue
-  }
-  editingSku.value = null
 }
 
 function cancelEditQuantity() {
   editingSku.value = null
 }
+// ─────────────────────────────────────────────────────────────
 
-// Función para descargar TXT
+// ── Exportar ──────────────────────────────────────────────────
 function downloadTxt() {
   if (Object.keys(inventory).length === 0) {
-    $q.notify({
-      type: 'warning',
-      message: 'No hay productos para descargar.',
-      position: 'top'
-    })
+    $q.notify({ type: 'warning', message: 'No hay productos para descargar.', position: 'top' })
     return
   }
-
-  // Generar contenido del archivo TXT
-  // Formato: SKU,Cantidad (ej. 16,5)
   let content = ''
-  for (const sku in inventory) {
-    content += `${sku},${inventory[sku].cantidad}\n`
-  }
-
-  // Crear el blob y descargar
+  for (const sku in inventory) content += `${sku},${inventory[sku].cantidad}\n`
   const blob = new Blob([content], { type: 'text/plain' })
   const url = window.URL.createObjectURL(blob)
   const link = document.createElement('a')
-  
-  // Nombre fijo del archivo
-  const fileName = 'colector.txt'
-  
   link.href = url
-  link.download = fileName
+  link.download = 'colector.txt'
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
   window.URL.revokeObjectURL(url)
-
-  $q.notify({
-    type: 'positive',
-    message: `Archivo ${fileName} descargado.`,
-    position: 'top'
-  })
+  $q.notify({ type: 'positive', message: 'Archivo colector.txt descargado.', position: 'top' })
 }
 
 async function sendToServer() {
   if (Object.keys(inventory).length === 0) {
-    $q.notify({
-      type: 'warning',
-      message: 'No hay productos para enviar.',
-      position: 'top'
-    })
+    $q.notify({ type: 'warning', message: 'No hay productos para enviar.', position: 'top' })
     return
   }
-
   const result = await fileStore.uploadInventoryFile(inventory, inventoryName.value)
-  
   if (result.success) {
-    $q.notify({
-      type: 'positive',
-      message: 'Inventario enviado al servidor correctamente.',
-      position: 'top'
-    })
+    $q.notify({ type: 'positive', message: 'Inventario enviado al servidor correctamente.', position: 'top' })
   } else {
-    $q.notify({
-      type: 'negative',
-      message: `Error al enviar: ${result.error}`,
-      position: 'top'
-    })
+    $q.notify({ type: 'negative', message: `Error al enviar: ${result.error}`, position: 'top' })
   }
 }
 
 function downloadExcel() {
   if (Object.keys(inventory).length === 0) {
-    $q.notify({
-      type: 'warning',
-      message: 'No hay productos para descargar.',
-      position: 'top'
-    })
+    $q.notify({ type: 'warning', message: 'No hay productos para descargar.', position: 'top' })
     return
   }
-
-  // Crear datos para Excel
   const data = []
   for (const sku in inventory) {
-    data.push({
-      SKU: sku,
-      Producto: inventory[sku].nombre,
-      Cantidad: inventory[sku].cantidad
-    })
+    data.push({ SKU: sku, Producto: inventory[sku].nombre, Cantidad: inventory[sku].cantidad })
   }
-
-  // Crear worksheet
   const ws = XLSX.utils.json_to_sheet(data)
-  
-  // Crear workbook
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Inventario')
-  
-  // Generar nombre de archivo con fecha
   const date = new Date().toISOString().split('T')[0]
   const fileName = `${inventoryName.value}_inventario_${date}.xlsx`
-  
-  // Descargar archivo
   XLSX.writeFile(wb, fileName)
-
-  $q.notify({
-    type: 'positive',
-    message: `Archivo ${fileName} descargado.`,
-    position: 'top'
-  })
+  $q.notify({ type: 'positive', message: `Archivo ${fileName} descargado.`, position: 'top' })
 }
+// ─────────────────────────────────────────────────────────────
 
+// ── Navegación ────────────────────────────────────────────────
 function goHome() {
   router.push('/')
 }
 
-function downloadUnauthorizedTxt() {
-  // Obtener los SKUs no autorizados
-  const savedUnauthorized = localStorage.getItem('unauthorizedSkus')
-  if (!savedUnauthorized) {
-    $q.notify({
-      type: 'warning',
-      message: 'No hay SKUs no permitidos registrados.',
-      position: 'top'
-    })
-    return
-  }
-  
-  let unauthorizedSkus = []
-  try {
-    unauthorizedSkus = JSON.parse(savedUnauthorized)
-  } catch (e) {
-    $q.notify({
-      type: 'negative',
-      message: 'Error al leer los SKUs no permitidos.',
-      position: 'top'
-    })
-    return
-  }
-  
-  if (unauthorizedSkus.length === 0) {
-    $q.notify({
-      type: 'warning',
-      message: 'No hay SKUs no permitidos registrados.',
-      position: 'top'
-    })
-    return
-  }
-  
-  // Formato: SKU,Fecha,Inventario
-  let content = 'SKU,Fecha,Inventario\n'
-  unauthorizedSkus.forEach(item => {
-    content += `${item.sku},${item.timestamp},${item.inventoryName}\n`
-  })
-  
-  // Crear el blob y descargar
-  const blob = new Blob([content], { type: 'text/csv' })
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  
-  const fileName = 'skus_no_permitidos.csv'
-  
-  link.href = url
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  window.URL.revokeObjectURL(url)
-  
-  $q.notify({
-    type: 'positive',
-    message: `Archivo ${fileName} descargado (${unauthorizedSkus.length} registros).`,
-    position: 'top'
-  })
-}
-
-function handleCodeScanned(code) {
-  skuInput.value = code
-  addItem()
+function goToReports() {
+  router.push(`/reports/${encodeURIComponent(inventoryName.value)}`)
 }
 
 function toggleDarkMode() {
   $q.dark.toggle()
 }
 
-function goToReports() {
-  router.push(`/reports/${encodeURIComponent(inventoryName.value)}`)
+function handleCodeScanned(code) {
+  skuInput.value = code
+  addItem()
 }
+// ─────────────────────────────────────────────────────────────
 </script>
 
 <template>
+  <!-- Flash visual al escanear -->
+  <div
+    v-if="scanFlash"
+    :class="['scan-flash', scanFlash === 'success' ? 'scan-flash--success' : 'scan-flash--error']"
+  />
+
   <div class="scanner-view">
     <header>
       <div class="header-content">
@@ -526,10 +488,40 @@ function goToReports() {
         />
       </div>
     </header>
+
     <main>
       <!-- Sección de Escaneo -->
       <section class="scanner-section">
-        <h4>Escanear SKU</h4>
+        <div class="scanner-header">
+          <h4>Escanear SKU</h4>
+          <div class="scanner-toggles">
+            <!-- Toggle modo rápido -->
+            <div class="fast-mode-toggle">
+              <q-toggle v-model="fastScanMode" color="positive" dense />
+              <span class="fast-mode-label" :class="{ 'fast-mode-label--active': fastScanMode }">
+                Modo rápido
+              </span>
+              <q-icon name="help_outline" size="16px" color="grey-6" class="q-ml-xs">
+                <q-tooltip max-width="200px">
+                  Suma 1 automáticamente al escanear, sin pedir cantidad
+                </q-tooltip>
+              </q-icon>
+            </div>
+            <!-- Toggle base de datos -->
+            <div class="fast-mode-toggle">
+              <q-toggle v-model="useDatabase" color="info" dense />
+              <span class="fast-mode-label" :class="{ 'fast-mode-label--active': useDatabase }">
+                Base de datos
+              </span>
+              <q-icon name="help_outline" size="16px" color="grey-6" class="q-ml-xs">
+                <q-tooltip max-width="200px">
+                  Consulta el nombre del producto al servidor al escanear
+                </q-tooltip>
+              </q-icon>
+            </div>
+          </div>
+        </div>
+
         <div class="scanner-container">
           <q-input
             ref="skuInputRef"
@@ -542,11 +534,8 @@ function goToReports() {
             :disable="loading"
           >
             <template v-slot:prepend>
-              <q-btn 
-                flat 
-                round 
-                dense 
-                icon="photo_camera" 
+              <q-btn
+                flat round dense icon="photo_camera"
                 @click="showCameraModal = true"
                 class="camera-btn"
                 :disable="loading"
@@ -559,51 +548,72 @@ function goToReports() {
           </q-input>
           <q-btn color="primary" label="OK" @click="addItem" class="scan-btn" :loading="loading" />
         </div>
+
+        <!-- Botón Deshacer último escaneo -->
+        <transition name="undo-slide">
+          <div v-if="lastAction" class="undo-bar">
+            <q-btn
+              color="warning"
+              text-color="dark"
+              icon="undo"
+              :label="`Deshacer: ${lastAction.productName}`"
+              @click="undoLastScan"
+              unelevated
+              no-caps
+              class="undo-btn"
+              size="sm"
+            />
+          </div>
+        </transition>
       </section>
 
       <!-- Resumen de Inventario -->
       <section class="summary-section" v-if="Object.keys(inventory).length > 0">
         <div class="summary-card">
           <div class="summary-item">
-            <span class="summary-label">Total Productos:</span>
-            <span class="summary-value">{{ Object.keys(filteredInventory).length }}</span>
+            <span class="summary-label">Total Productos</span>
+            <span class="summary-value">{{ Object.keys(inventory).length }}</span>
           </div>
           <div class="summary-item">
-            <span class="summary-label">Total Piezas:</span>
+            <span class="summary-label">Total Piezas</span>
             <span class="summary-value total-piezas">{{ totalPiezas }}</span>
+          </div>
+          <div class="summary-item">
+            <q-btn
+              flat dense
+              icon="history"
+              label="Historial"
+              color="primary"
+              @click="showHistoryModal = true"
+              size="sm"
+              no-caps
+            />
           </div>
         </div>
       </section>
-      
-      <!-- Indicador de Transpaso de Entrada -->
+
+      <!-- Indicador de Traspaso de Entrada -->
       <div class="entrada-section">
         <div v-if="Object.keys(entradaSkus).length > 0" class="entrada-indicator">
           <q-icon name="check_circle" color="positive" />
-          <span>Transpaso de entrada activo ({{ Object.keys(entradaSkus).length }} items)</span>
+          <span>Traspaso de entrada activo ({{ Object.keys(entradaSkus).length }} items)</span>
           <q-btn flat dense icon="close" size="sm" @click="clearEntradaSkus" color="negative" />
         </div>
-        <q-btn v-else outline color="primary" icon="upload_file" label="Cargar traspaso de entrada" @click="triggerFileInput" size="sm" />
+        <q-btn
+          v-else
+          outline color="primary" icon="upload_file"
+          label="Cargar traspaso de entrada"
+          @click="triggerFileInput" size="sm"
+        />
         <input ref="fileInputRef" type="file" accept=".txt" style="display: none" @change="handleFileUpload" />
       </div>
 
       <!-- Búsqueda -->
       <section class="search-section" v-if="Object.keys(inventory).length > 0">
-        <q-input
-          v-model="searchQuery"
-          filled
-          placeholder="Buscar por SKU o nombre..."
-          dense
-        >
-          <template v-slot:prepend>
-            <q-icon name="search" />
-          </template>
+        <q-input v-model="searchQuery" filled placeholder="Buscar por SKU o nombre..." dense>
+          <template v-slot:prepend><q-icon name="search" /></template>
           <template v-slot:append>
-            <q-icon 
-              v-if="searchQuery" 
-              name="close" 
-              class="cursor-pointer" 
-              @click="searchQuery = ''" 
-            />
+            <q-icon v-if="searchQuery" name="close" class="cursor-pointer" @click="searchQuery = ''" />
           </template>
         </q-input>
       </section>
@@ -614,42 +624,31 @@ function goToReports() {
           <h2>Inventario ({{ Object.keys(filteredInventory).length }} items)</h2>
           <div class="actions-container">
             <div class="download-buttons">
-              <q-btn 
-                color="secondary" 
-                icon="download" 
-                label="TXT" 
-                @click="downloadTxt" 
-                size="sm"
+              <q-btn
+                color="secondary" icon="download" label="TXT"
+                @click="downloadTxt" size="sm"
                 :disable="Object.keys(inventory).length === 0"
               />
-              <q-btn 
-                color="primary" 
-                icon="table_view" 
-                label="Excel" 
-                @click="downloadExcel" 
-                size="sm"
+              <q-btn
+                color="primary" icon="table_view" label="Excel"
+                @click="downloadExcel" size="sm"
                 :disable="Object.keys(inventory).length === 0"
               />
-              <q-btn 
-                color="positive" 
-                icon="cloud_upload" 
-                label="Enviar al servidor" 
-                @click="sendToServer" 
-                size="sm"
+              <q-btn
+                color="positive" icon="cloud_upload" label="Enviar"
+                @click="sendToServer" size="sm"
                 :loading="fileStore.uploading"
                 :disable="Object.keys(inventory).length === 0"
               />
             </div>
-            <q-btn 
-              color="accent" 
-              icon="compare_arrows" 
-              label="Comparativa" 
-              @click="goToReports" 
-              class="comparativa-btn"
+            <q-btn
+              color="accent" icon="compare_arrows" label="Comparativa"
+              @click="goToReports" class="comparativa-btn"
               :disable="Object.keys(inventory).length === 0"
             />
           </div>
         </div>
+
         <q-markup-table flat bordered>
           <thead>
             <tr>
@@ -667,15 +666,11 @@ function goToReports() {
                 </div>
               </td>
               <td class="text-center">
-                <!-- Edición directa de cantidad -->
                 <div v-if="editingSku === sku" class="edit-quantity">
                   <q-input
                     :model-value="item.cantidad"
                     @update:model-value="val => inventory[sku].cantidad = parseInt(val) || 1"
-                    type="number"
-                    min="1"
-                    dense
-                    autofocus
+                    type="number" min="1" dense autofocus
                     @blur="cancelEditQuantity()"
                     @keyup.enter="cancelEditQuantity()"
                     class="edit-input"
@@ -703,40 +698,75 @@ function goToReports() {
       </section>
     </main>
 
-    <!-- Modal para Cantidad -->
-    <q-dialog v-model="showQuantityModal" persistent>
+    <!-- Modal de Cantidad -->
+    <q-dialog v-model="showQuantityModal" persistent @show="() => qtyInputRef?.select()">
       <q-card style="min-width: 300px">
         <q-card-section class="text-center">
           <div class="text-h6">Ingresar Cantidad</div>
-          <div class="text-subtitle2 text-grey">{{ tempProductName }} ({{ tempSku }})</div>
+          <div class="text-subtitle2 text-grey">{{ tempProductName }}</div>
+          <div class="text-caption text-grey">SKU: {{ tempSku }}</div>
         </q-card-section>
-
         <q-card-section class="q-pt-none">
           <div class="quantity-control">
             <q-btn round color="primary" icon="remove" @click="quantity > 1 ? quantity-- : null" size="lg" />
-            <q-input 
-              v-model.number="quantity" 
-              type="number" 
-              min="1" 
-              outlined 
+            <q-input
+              ref="qtyInputRef"
+              v-model.number="quantity"
+              type="number" min="1" outlined
               input-class="text-center text-h5"
               class="qty-input"
             />
             <q-btn round color="primary" icon="add" @click="quantity++" size="lg" />
           </div>
         </q-card-section>
-
         <q-card-actions align="right">
-          <q-btn flat label="Cancelar" color="grey" v-close-popup />
-          <q-btn flat label="Aceptar" color="primary" @click="confirmQuantity" v-close-popup />
+          <q-btn flat label="Cancelar" color="grey" @click="cancelQuantity" />
+          <q-btn flat label="Aceptar" color="primary" @click="confirmQuantity" />
         </q-card-actions>
       </q-card>
     </q-dialog>
 
-    <CameraScanner 
-      v-model="showCameraModal" 
-      @code-scanned="handleCodeScanned" 
-    />
+    <!-- Modal de Historial -->
+    <q-dialog v-model="showHistoryModal">
+      <q-card style="min-width: 320px; max-width: 500px; width: 90vw">
+        <q-card-section class="row items-center q-pb-none">
+          <div class="text-h6">Historial de escaneos</div>
+          <q-space />
+          <q-btn icon="close" flat round dense v-close-popup />
+        </q-card-section>
+
+        <q-card-section style="max-height: 60vh; overflow-y: auto; padding-top: 8px">
+          <div v-if="actionHistory.length === 0" class="text-center text-grey q-pa-lg">
+            <q-icon name="history" size="40px" class="q-mb-sm" />
+            <div>No hay acciones registradas aún</div>
+          </div>
+          <q-list v-else separator>
+            <q-item v-for="(entry, idx) in actionHistory" :key="idx" dense>
+              <q-item-section avatar>
+                <q-icon
+                  :name="entry.action === 'undo' ? 'undo' : entry.action === 'add' ? 'add_circle' : 'add'"
+                  :color="entry.action === 'undo' ? 'warning' : entry.action === 'add' ? 'positive' : 'primary'"
+                  size="20px"
+                />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>{{ entry.productName }}</q-item-label>
+                <q-item-label caption>
+                  {{ entry.sku }}
+                  <span v-if="entry.action !== 'undo'"> · +{{ entry.quantity }}</span>
+                  <span v-else class="text-warning"> · deshecho</span>
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-item-label caption>{{ formatHistoryTime(entry.timestamp) }}</q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+    </q-dialog>
+
+    <CameraScanner v-model="showCameraModal" @code-scanned="handleCodeScanned" />
 
     <footer>
       <p>Colector v1.0 - Mobile Ready</p>
@@ -745,9 +775,82 @@ function goToReports() {
 </template>
 
 <style scoped>
-* {
-  box-sizing: border-box;
+* { box-sizing: border-box; }
+
+/* ── Flash visual ─────────────────────────────────────────── */
+.scan-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  animation: flash-fade 0.3s ease-out forwards;
 }
+.scan-flash--success { background: rgba(33, 186, 69, 0.35); }
+.scan-flash--error   { background: rgba(193, 0, 21, 0.35); }
+
+@keyframes flash-fade {
+  0%   { opacity: 1; }
+  100% { opacity: 0; }
+}
+/* ─────────────────────────────────────────────────────────── */
+
+/* ── Deshacer ─────────────────────────────────────────────── */
+.undo-bar {
+  margin-top: 8px;
+}
+.undo-btn {
+  width: 100%;
+  border-radius: 6px;
+}
+
+/* Transición de entrada/salida del botón deshacer */
+.undo-slide-enter-active,
+.undo-slide-leave-active {
+  transition: all 0.25s ease;
+}
+.undo-slide-enter-from,
+.undo-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+/* ─────────────────────────────────────────────────────────── */
+
+/* ── Modo rápido ──────────────────────────────────────────── */
+.scanner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scanner-toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.fast-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fast-mode-label {
+  font-size: 0.8rem;
+  color: #666;
+  transition: color 0.2s;
+}
+.fast-mode-label--active {
+  color: #21BA45;
+  font-weight: 600;
+}
+
+body.body--dark .fast-mode-label { color: #aaa; }
+body.body--dark .fast-mode-label--active { color: #66bb6a; }
+/* ─────────────────────────────────────────────────────────── */
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -757,9 +860,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-body.body--dark {
-  background-color: #121212;
-}
+body.body--dark { background-color: #121212; }
 
 .scanner-view {
   padding-bottom: 60px;
@@ -772,8 +873,6 @@ header {
   background-color: #1976D2;
   color: white;
   padding: 0;
-  padding-block: 0;
-  padding-inline: 0;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -781,9 +880,7 @@ header {
   line-height: 1;
 }
 
-body.body--dark header {
-  background-color: #0d47a1;
-}
+body.body--dark header { background-color: #0d47a1; }
 
 .header-content {
   display: flex;
@@ -793,9 +890,7 @@ body.body--dark header {
   position: relative;
 }
 
-.back-btn {
-  color: white;
-}
+.back-btn { color: white; }
 
 header h1 {
   margin: 0;
@@ -815,23 +910,18 @@ main {
   padding: 15px;
 }
 
-/* Scanner Section */
-.scanner-section {
-  margin-bottom: 20px;
-}
+.scanner-section { margin-bottom: 20px; }
 
 .scanner-section h4 {
   font-size: 0.9rem;
   color: #1976D2;
-  margin: 0 0 10px 0;
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 1px;
   font-weight: 600;
 }
 
-body.body--dark .scanner-section h4 {
-  color: #64b5f6;
-}
+body.body--dark .scanner-section h4 { color: #64b5f6; }
 
 .scanner-container {
   display: flex;
@@ -842,51 +932,39 @@ body.body--dark .scanner-section h4 {
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 
-body.body--dark .scanner-container {
-  background: #1e1e1e;
-}
+body.body--dark .scanner-container { background: #1e1e1e; }
 
-.sku-input {
-  flex: 1;
-}
+.sku-input { flex: 1; }
 
 .scan-btn {
   height: 56px;
   font-weight: bold;
 }
 
-/* Summary Section */
-.summary-section {
-  margin-bottom: 15px;
-}
+.summary-section { margin-bottom: 15px; }
 
 .summary-card {
   display: flex;
   justify-content: space-around;
+  align-items: center;
   background: white;
-  padding: 15px;
+  padding: 12px 15px;
   border-radius: 8px;
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 
-body.body--dark .summary-card {
-  background: #1e1e1e;
-}
+body.body--dark .summary-card { background: #1e1e1e; }
 
-.summary-item {
-  text-align: center;
-}
+.summary-item { text-align: center; }
 
 .summary-label {
   display: block;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: #666;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
 }
 
-body.body--dark .summary-label {
-  color: #aaaaaa;
-}
+body.body--dark .summary-label { color: #aaa; }
 
 .summary-value {
   font-size: 1.2rem;
@@ -894,18 +972,14 @@ body.body--dark .summary-label {
   color: #1976D2;
 }
 
-body.body--dark .summary-value {
-  color: #64b5f6;
-}
+body.body--dark .summary-value { color: #64b5f6; }
 
 .total-piezas {
   color: #28a745;
   font-size: 1.4rem;
 }
 
-.entrada-section {
-  margin-bottom: 15px;
-}
+.entrada-section { margin-bottom: 15px; }
 
 .entrada-indicator {
   display: flex;
@@ -918,12 +992,8 @@ body.body--dark .summary-value {
   font-size: 0.9rem;
 }
 
-/* Search Section */
-.search-section {
-  margin-bottom: 15px;
-}
+.search-section { margin-bottom: 15px; }
 
-/* Inventory Table */
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -944,9 +1014,7 @@ body.body--dark .summary-value {
   gap: 5px;
 }
 
-.comparativa-btn {
-  font-weight: bold;
-}
+.comparativa-btn { font-weight: bold; }
 
 .inventory-section h2 {
   font-size: 1rem;
@@ -954,9 +1022,7 @@ body.body--dark .summary-value {
   color: #555;
 }
 
-body.body--dark .inventory-section h2 {
-  color: #aaaaaa;
-}
+body.body--dark .inventory-section h2 { color: #aaa; }
 
 .product-info {
   display: flex;
@@ -969,9 +1035,7 @@ body.body--dark .inventory-section h2 {
   font-weight: bold;
 }
 
-body.body--dark .sku-code {
-  color: #777;
-}
+body.body--dark .sku-code { color: #777; }
 
 .product-name {
   font-size: 1rem;
@@ -979,9 +1043,7 @@ body.body--dark .sku-code {
   margin-top: 2px;
 }
 
-body.body--dark .product-name {
-  color: #e0e0e0;
-}
+body.body--dark .product-name { color: #e0e0e0; }
 
 .quantity-badge {
   font-size: 1.1rem;
@@ -989,18 +1051,14 @@ body.body--dark .product-name {
   cursor: pointer;
 }
 
-.quantity-display {
-  cursor: pointer;
-}
+.quantity-display { cursor: pointer; }
 
 .edit-quantity {
   display: flex;
   justify-content: center;
 }
 
-.edit-input {
-  width: 60px;
-}
+.edit-input { width: 60px; }
 
 .quantity-control {
   display: flex;
@@ -1010,13 +1068,9 @@ body.body--dark .product-name {
   margin: 20px 0;
 }
 
-.qty-input {
-  width: 80px;
-}
+.qty-input { width: 80px; }
 
-.camera-btn {
-  color: #1976D2;
-}
+.camera-btn { color: #1976D2; }
 
 footer {
   text-align: center;
@@ -1029,72 +1083,24 @@ footer {
   font-size: 0.9rem;
 }
 
-/* Modo oscuro específico para footer */
-body.body--dark footer {
-  background-color: #1e1e1e;
-}
+body.body--dark footer { background-color: #1e1e1e; }
 
-/* Estilos para tabla en modo oscuro */
-body.body--dark .q-markup-table {
-  background: #1e1e1e;
-  color: #e0e0e0;
-}
+/* Tabla en modo oscuro */
+body.body--dark .q-markup-table { background: #1e1e1e; color: #e0e0e0; }
+body.body--dark .q-markup-table thead tr th { color: #e0e0e0; }
+body.body--dark .q-markup-table tbody tr td { color: #e0e0e0; }
+body.body--dark .q-markup-table tbody tr:nth-child(even) { background: #2a2a2a; }
+body.body--dark .q-markup-table tbody tr:hover { background: #333; }
 
-body.body--dark .q-markup-table thead tr th {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-markup-table tbody tr td {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-markup-table tbody tr:nth-child(even) {
-  background: #2a2a2a;
-}
-
-body.body--dark .q-markup-table tbody tr:hover {
-  background: #333333;
-}
-
-/* Estilos para componentes de Quasar en modo oscuro */
-body.body--dark .q-input--filled {
-  background-color: #2a2a2a;
-}
-
-body.body--dark .q-field__label {
-  color: #aaaaaa;
-}
-
-body.body--dark .q-field__control {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-field__input {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-btn {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-card {
-  background-color: #1e1e1e;
-  color: #e0e0e0;
-}
-
-body.body--dark .q-dialog__title {
-  color: #e0e0e0;
-}
-
-body.body--dark .q-dialog__message {
-  color: #aaaaaa;
-}
-
-body.body--dark .text-grey {
-  color: #aaaaaa !important;
-}
-
-body.body--dark .q-badge {
-  background-color: #1976D2;
-}
+/* Quasar en modo oscuro */
+body.body--dark .q-input--filled { background-color: #2a2a2a; }
+body.body--dark .q-field__label { color: #aaa; }
+body.body--dark .q-field__control { color: #e0e0e0; }
+body.body--dark .q-field__input { color: #e0e0e0; }
+body.body--dark .q-btn { color: #e0e0e0; }
+body.body--dark .q-card { background-color: #1e1e1e; color: #e0e0e0; }
+body.body--dark .q-dialog__title { color: #e0e0e0; }
+body.body--dark .q-dialog__message { color: #aaa; }
+body.body--dark .text-grey { color: #aaa !important; }
+body.body--dark .q-badge { background-color: #1976D2; }
 </style>

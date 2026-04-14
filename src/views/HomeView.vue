@@ -146,6 +146,40 @@ function toggleDarkMode() {
       </div>
     </header>
     <main class="home-main">
+      <!-- Guía rápida de uso -->
+      <div class="guide-card">
+        <h2>¿Cómo usar?</h2>
+        <div class="guide-steps">
+          <div class="guide-step">
+            <div class="guide-step-icon">
+              <q-icon name="edit_note" size="28px" color="white" />
+            </div>
+            <div class="guide-step-text">
+              <strong>1. Pon un nombre</strong>
+              <span>Escribe el nombre de tu inventario y pulsa "Comenzar"</span>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-step-icon guide-step-icon--2">
+              <q-icon name="qr_code_scanner" size="28px" color="white" />
+            </div>
+            <div class="guide-step-text">
+              <strong>2. Escanea productos</strong>
+              <span>Usa la cámara o escribe el código del producto</span>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-step-icon guide-step-icon--3">
+              <q-icon name="download" size="28px" color="white" />
+            </div>
+            <div class="guide-step-text">
+              <strong>3. Exporta</strong>
+              <span>Descarga el inventario en Excel o TXT cuando termines</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Sección para crear nuevo inventario -->
       <div class="home-card">
         <h2>Crear Nuevo Inventario</h2>
@@ -428,4 +462,74 @@ body.body--dark .q-file--filled {
 body.body--dark .text-grey {
   color: #aaaaaa !important;
 }
+
+/* ── Guía rápida ───────────────────────────────────────────── */
+.guide-card {
+  background: white;
+  padding: 20px 25px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
+
+body.body--dark .guide-card {
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+.guide-card h2 {
+  margin-top: 0;
+  margin-bottom: 16px;
+  color: #1976D2;
+  font-size: 1.1rem;
+}
+
+body.body--dark .guide-card h2 { color: #64b5f6; }
+
+.guide-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.guide-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.guide-step-icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #1976D2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-step-icon--2 { background: #26A69A; }
+.guide-step-icon--3 { background: #21BA45; }
+
+.guide-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.guide-step-text strong {
+  font-size: 0.95rem;
+  color: #222;
+}
+
+body.body--dark .guide-step-text strong { color: #e0e0e0; }
+
+.guide-step-text span {
+  font-size: 0.82rem;
+  color: #777;
+  line-height: 1.3;
+}
+
+body.body--dark .guide-step-text span { color: #aaa; }
+/* ─────────────────────────────────────────────────────────── */
 </style>

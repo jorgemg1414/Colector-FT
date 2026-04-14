@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://10.20.0.85:3000'
+  baseURL: 'http://10.20.0.85:3000',
+  timeout: 4000
 })
 
 export const useProductStore = defineStore('products', {
